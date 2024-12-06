@@ -24,6 +24,11 @@ mongoose.connect(process.env.MONGO_URL)
     .then(() => console.log('MongoDB Connected Successfully'))
     .catch(err => console.error('MongoDB Connection Error:', err));
 
+
+app.get('/sample', (req, res) => {
+    res.send('Hello from Express!');
+});
+
 // Registration route
 app.post('/api/v1/user/register', async (req, res) => {
     try {
