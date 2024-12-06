@@ -16,7 +16,7 @@ const PORT = 8080;
 
 // Middleware
 app.use(cors({
-    origin: 'https://your-frontend-url-on-vercel.com', // Replace with your Vercel frontend URL
+    origin: 'https://mern-sdp-client-5n1ky3wp9-monika-tamminenis-projects.vercel.app/', // Replace with your Vercel frontend URL
     credentials: true
 }));
 app.use(express.json()); // To parse JSON request bodies
