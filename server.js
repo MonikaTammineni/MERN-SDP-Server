@@ -9,6 +9,7 @@ const Appointment = require('./models/Appointment');
 const BlockedSlot = require('./models/BlockedSlot');
 const authMiddleware = require('./middleware/authMiddleware');
 const moment = require('moment');
+const Message = require('./models/Message');
 
 const app = express();
 const PORT = 8080;
@@ -531,15 +532,16 @@ app.post('/api/v1/doctor/block-slot', authMiddleware, async (req, res) => {
     }
 });
 
-// Update appointment status
+// Update appointment status and prescription
 app.put('/api/v1/doctor/appointment-status', authMiddleware, async (req, res) => {
     try {
-        const { appointmentId, status, prescription } = req.body; // Get prescription from request
-        const doctorId = req.user._id;
+        const { appointmentId, status, prescription } = req.body;
+        console.log('Updating appointment:', { appointmentId, status });
+        console.log('Prescription data:', prescription);
 
         const appointment = await Appointment.findOne({
             _id: appointmentId,
-            doctor: doctorId
+            doctor: req.user._id
         });
 
         if (!appointment) {
@@ -549,21 +551,33 @@ app.put('/api/v1/doctor/appointment-status', authMiddleware, async (req, res) =>
             });
         }
 
+        // Update status
         appointment.status = status;
-        if (prescription) {
-            appointment.prescription = prescription; // Save prescription URL
+
+        // Add prescription if provided
+        if (prescription && prescription.medicines) {
+            appointment.prescriptionDetails = {
+                medicines: prescription.medicines,
+                instructions: prescription.instructions,
+                prescribedDate: new Date()
+            };
         }
+
         await appointment.save();
+        console.log('Updated appointment:', appointment);
 
         res.status(200).json({
             success: true,
-            message: 'Appointment status updated successfully'
+            message: 'Appointment updated successfully',
+            data: appointment
         });
+
     } catch (error) {
-        console.error('Error updating appointment status:', error);
+        console.error('Error updating appointment:', error);
         res.status(500).json({
             success: false,
-            message: 'Error updating appointment status'
+            message: 'Error updating appointment',
+            error: error.message
         });
     }
 });
@@ -677,14 +691,12 @@ app.put('/api/v1/user/cancel-appointment/:id', authMiddleware, async (req, res) 
             _id: req.params.id,
             patient: req.user._id
         });
-
         if (!appointment) {
             return res.status(404).json({
                 success: false,
                 message: 'Appointment not found'
             });
         }
-
         appointment.status = 'cancelled';
         await appointment.save();
 
@@ -767,15 +779,246 @@ app.post('/api/v1/user/profile', authMiddleware, async (req, res) => {
 // API endpoint to retrieve a profile
 app.get('/api/v1/user/profile', authMiddleware, async (req, res) => {
     console.log('Retrieving profile for user:', req.user._id); // Debug log
+    console.log('Fetching profile for user:', req); // Debug log
     try {
-        const profile = await UserProfile.findOne({ userId: req.user._id }); // Retrieve profile for the authenticated user
+        const profile = await User.findById(req.user._id).select('-password'); // Retrieve profile for the authenticated user
+        console.log('Profile found:', profile); // Debug log
         if (!profile) {
             return res.status(404).json({ success: false, message: 'Profile not found' });
         }
         res.status(200).json(profile);
     } catch (error) {
         console.error('Error fetching profile:', error); // Debug log
-        res.status(400).json({ success: false, message: 'Error fetching profile', error });
+        res.status(400).json({ success: false, message: 'Error fetching profile from server', error });
+    }
+});
+
+// Add prescription to appointment (for doctors)
+app.post('/api/v1/doctor/add-prescription/:appointmentId', authMiddleware, async (req, res) => {
+    try {
+        const { appointmentId } = req.params;
+        const { medicines, instructions } = req.body;
+
+        // Find the appointment
+        const appointment = await Appointment.findOne({
+            _id: appointmentId,
+            doctor: req.user._id,
+            status: 'completed'
+        });
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: 'Appointment not found or not completed'
+            });
+        }
+
+        // Update appointment with prescription
+        appointment.prescriptionDetails = {
+            medicines: medicines.map(med => ({
+                name: med.name,
+                dosage: med.dosage,
+                duration: med.duration
+            })),
+            instructions,
+            prescribedDate: new Date()
+        };
+
+        await appointment.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Prescription added successfully',
+            prescription: appointment.prescriptionDetails
+        });
+
+    } catch (error) {
+        console.error('Error adding prescription:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error adding prescription',
+            error: error.message
+        });
+    }
+});
+
+// Get user's prescriptions (completed appointments with prescriptions)
+app.get('/api/v1/user/prescriptions', authMiddleware, async (req, res) => {
+    try {
+        console.log('Fetching prescriptions for user:', req.user._id);
+        
+        // First, check if there are any completed appointments
+        const completedAppointments = await Appointment.find({ 
+            patient: req.user._id,
+            status: 'completed'
+        });
+        console.log('Completed appointments:', completedAppointments);
+
+        // Then get appointments with prescriptions
+        const prescriptions = await Appointment.find({ 
+            patient: req.user._id,
+            status: 'completed',
+            prescriptionDetails: { $exists: true, $ne: null }
+        })
+        .populate('doctor', 'name specialization')
+        .sort({ appointmentDate: -1 });
+        
+        console.log('Found prescriptions:', prescriptions);
+        
+        res.status(200).json({
+            success: true,
+            data: prescriptions || [], // Ensure we always send an array
+            message: prescriptions.length ? 'Prescriptions found' : 'No prescriptions found'
+        });
+    } catch (error) {
+        console.error('Error fetching prescriptions:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching prescriptions',
+            error: error.message
+        });
+    }
+});
+
+// Send message (for public users - no auth required)
+app.post('/api/v1/messages', async (req, res) => {
+    try {
+        console.log('Received message request:', req.body); // Debug log
+        
+        const { email, message } = req.body;
+        
+        // Validate inputs
+        if (!email || !message) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email and message are required'
+            });
+        }
+
+        // Create new message
+        const newMessage = new Message({
+            email,
+            message,
+            status: 'pending'
+        });
+
+        console.log('Saving message:', newMessage); // Debug log
+
+        await newMessage.save();
+        console.log('Message saved successfully'); // Debug log
+
+        res.status(201).json({
+            success: true,
+            message: 'Message sent successfully'
+        });
+    } catch (error) {
+        console.error('Error details:', error); // Detailed error log
+        res.status(500).json({
+            success: false,
+            message: 'Error sending message',
+            error: error.message
+        });
+    }
+});
+
+// Get all messages (admin only)
+app.get('/api/v1/admin/messages', authMiddleware, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. Admin only.'
+            });
+        }
+
+        const messages = await Message.find().sort({ createdAt: -1 });
+        
+        res.status(200).json({
+            success: true,
+            data: messages
+        });
+    } catch (error) {
+        console.error('Error fetching messages:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching messages',
+            error: error.message
+        });
+    }
+});
+
+// Mark message as read (admin only)
+app.put('/api/v1/admin/messages/:messageId', authMiddleware, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. Admin only.'
+            });
+        }
+
+        const message = await Message.findByIdAndUpdate(
+            req.params.messageId,
+            { status: 'read' },
+            { new: true }
+        );
+
+        if (!message) {
+            return res.status(404).json({
+                success: false,
+                message: 'Message not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: message
+        });
+    } catch (error) {
+        console.error('Error updating message:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating message',
+            error: error.message
+        });
+    }
+});
+// Complete appointment
+app.post('/api/v1/doctor/complete-appointment/:appointmentId', authMiddleware, async (req, res) => {
+    try {
+        const { appointmentId } = req.params;
+        
+        // Find and update the appointment status
+        const appointment = await Appointment.findOneAndUpdate(
+            {
+                _id: appointmentId,
+                doctor: req.user._id,
+                status: 'pending'
+            },
+            { status: 'completed' },
+            { new: true }
+        );
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: 'Appointment not found or already completed'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Appointment marked as completed'
+        });
+    } catch (error) {
+        console.error('Error completing appointment:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error completing appointment',
+            error: error.message
+        });
     }
 });
 

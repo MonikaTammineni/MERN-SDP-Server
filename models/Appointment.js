@@ -28,9 +28,17 @@ const AppointmentSchema = new mongoose.Schema({
         enum: ['pending', 'confirmed', 'completed', 'cancelled'],
         default: 'pending'
     },
-    prescription: {
-        type: String,
-        default: null
+    prescriptionDetails: {
+        medicines: [{
+            name: String,
+            dosage: String,
+            duration: String
+        }],
+        instructions: String,
+        prescribedDate: {
+            type: Date,
+            default: Date.now
+        }
     }
 }, { timestamps: true });
 
