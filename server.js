@@ -15,10 +15,7 @@ const app = express();
 const PORT = 8080;
 
 // Middleware
-app.use(cors({
-    origin: 'https://mern-sdp-client.vercel.app/', // Replace with your Vercel frontend URL
-    credentials: true
-}));
+app.use(cors());
 app.use(express.json()); // To parse JSON request bodies
 app.use(express.urlencoded({ extended: true }));
 
